@@ -1,0 +1,52 @@
+#!/usr/bin/perl -w 
+
+use IO::Socket::INET;
+use strict;
+use warnings;
+use POSIX;
+use Data::Dumper;
+
+$SIG{CHLD} = 'IGNORE';
+
+my $port = 9653;
+my $socket = IO::Socket::INET->new('LocalPort' => $port,
+				   'Proto' => 'tcp',
+				   'Listen' => SOMAXCONN)
+    or die "Can't create socket ($!)\n";
+print "Server listening\n";
+my ($client, $pid);
+while ($client = $socket->accept) {
+	print "Start $$\n";
+	next if $pid = fork();
+	die "Cannot fork" unless defined $pid;
+	
+	if ($> == 0) {
+		$> = 1000;
+	}
+	close ($socket);
+	my $name = gethostbyaddr($client->peeraddr, AF_INET);
+		print "$name $$ \n";
+		my $port = $client->peerport;
+		while (<$client>) {
+			if (/^>/) {
+				my ($path, $args) = /^> ([^;]+);(.*)/;
+				print "exec: \"/usr/bin/make $args 2>&1 |\"\n"; 
+				open (CMD, "/usr/bin/make $args 2>&1 |") or die ("dupa 2");
+				while (<CMD>) {
+					print $client "< ".$_;
+				}
+				print $client "! done\n";
+			} else {
+				die "dupa\n";	
+			}
+		}
+		close $client or die "Can't close ($!)\n";
+		print "Finish \n";
+		sleep 100;
+		exit (0);
+} continue {
+	print "Close client\n";
+	close $client;
+}
+die "Can't accept socket ($! / $$)\n";
+

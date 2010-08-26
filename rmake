@@ -1,0 +1,37 @@
+#!/usr/bin/perl -w
+#
+use IO::Socket::INET;
+use strict;
+use Cwd;
+
+my %paths = ("/usr/src", "/usr/src");
+
+
+
+# proto
+# > /path/to/source;params
+# < rcv 
+# ! finish
+my $name = "localhost";
+my $port = 9653;
+my $path = getcwd;
+my $arg="> $path;@ARGV\n";
+
+my $socket = IO::Socket::INET->new('PeerAddr' => $name,
+	'PeerPort' => $port,
+	'Proto' => 'tcp')
+	or die "Can't create socket ($!)\n";
+
+print $socket $arg;
+
+while (<$socket>) {
+	last if /^!/;
+	if (/^</) {
+		s/^< //;
+		print $_;
+	};
+}
+close $socket
+	or die "Can't close socket ($!)\n";
+
+# vim:tw=120:fdm=marker:ts=4:ft=perl:
