@@ -4,25 +4,55 @@ use IO::Socket::INET;
 use strict;
 use Cwd;
 
-my %paths = ("/usr/src", "/usr/src");
+my $path = getcwd;
+my $port = 0;
+my $server = "";
 
+sub help {
+	print "Unable to read configuration file. Please create file with configuration on put ";
+	print "it into ".$ENV{HOME}."/.rmakerc\n";
+	exit 1;
+}
 
+sub config_file {
+	open FH, $ENV{HOME}."/.rmakerc" or help;
+	my $len = 0;
+	while (<FH>) {
+		unless (/^\s*#/) {
+			chomp;
+			my ($conf_path, $remote) = /(.*)->(.*)/;
+			next unless defined($conf_path);
+			next unless defined($remote);
+			$conf_path =~ s/\*/\.\*/;
+			$conf_path =~ s/\s+$//;
+			$remote =~ s/^\s+//;
+			next if length($remote) == 0;
+			if ($path =~ /^$conf_path/) {
+				if (length($conf_path) >= $len) {
+					$len = length($conf_path);
+					($server, $port) = split(":", $remote);
+				}
+			}
+		}
+	}
+	$port = 9653 unless defined ($port);
+	close FH;
+}
 
 # proto
 # > /path/to/source;params
 # < rcv 
 # ! finish
-my $name = "localhost";
-my $port = 9653;
-my $path = getcwd;
-my $arg="> $path;@ARGV\n";
 
-my $socket = IO::Socket::INET->new('PeerAddr' => $name,
+config_file();
+print "Compiling on $server:$port ... \n";
+
+my $socket = IO::Socket::INET->new('PeerAddr' => $server,
 	'PeerPort' => $port,
-	'Proto' => 'tcp')
-	or die "Can't create socket ($!)\n";
+	'Timeout' => 5,
+	'Proto' => 'tcp') or die "Can't create socket ($!)\n";
 
-print $socket $arg;
+print $socket "> $path;@ARGV\n";
 
 while (<$socket>) {
 	last if /^!/;
@@ -31,7 +61,24 @@ while (<$socket>) {
 		print $_;
 	};
 }
-close $socket
-	or die "Can't close socket ($!)\n";
+my $err_code = 0;
+($err_code) = /done\s*\((\d+)\)/;
+close $socket or die "Can't close socket ($!)\n";
+
+exit $err_code
+__END__
+
+=head1 NAME
+
+rmake - execute make command on remote machine
+
+=head1 SYNOPIS
+
+asdjalsjdlajsdljasd
+
+=head1 SEE ALSO
+
+L<rmake-server>
 
 # vim:tw=120:fdm=marker:ts=4:ft=perl:
+

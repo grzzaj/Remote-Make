@@ -9,6 +9,50 @@ use Data::Dumper;
 $SIG{CHLD} = 'IGNORE';
 
 my $port = 9653;
+my %translate_table = ();
+
+sub config_file {
+	my $section = "";
+	my $section_param = "";
+	open FH, "rmake-server.conf" or die ("Unable to open configuration file");
+	while (<FH>) {
+		unless (/^\s*#/) {
+			chomp;
+			if (/^\[/) {
+				($section, $section_param) = /\[([^-]+)-?(.*)\]/;
+			} elsif ($section eq "server" && $section_param eq "") {
+				if (/port=/i) { ($port) = /port=(\d+)/i; }
+			} elsif ($section eq "path" && $section_param ne "") {
+				my ($key, $value) = /(.+)=(.*)/;
+				next unless $key;
+				next unless $value;
+				$translate_table{$section_param} = {} unless defined $translate_table{$section_param};	
+				$translate_table{$section_param}{$key} = $value;
+			}
+		}
+	}
+#	print Dumper(\%translate_table);
+}
+
+sub check_directory($) {
+	my $path;
+	my $dest = $path = shift;
+	while (length($path) > 0) {
+		if (defined($translate_table{$path})) { 
+			$dest =~ s/$path//;
+			$translate_table{$path}{"remote_path"} = $translate_table{$path}{"target"}.$dest;
+			return $translate_table{$path} 
+		}
+		$path =~ s/\/([^\/]*)$//;
+	}
+	return {}; 
+}
+
+config_file();
+
+if (fork() != 0) {
+	exit 0;
+}
 my $socket = IO::Socket::INET->new('LocalPort' => $port,
 				   'Proto' => 'tcp',
 				   'Listen' => SOMAXCONN)
@@ -16,34 +60,42 @@ my $socket = IO::Socket::INET->new('LocalPort' => $port,
 print "Server listening\n";
 my ($client, $pid);
 while ($client = $socket->accept) {
-	print "Start $$\n";
 	next if $pid = fork();
 	die "Cannot fork" unless defined $pid;
-	
-	if ($> == 0) {
-		$> = 1000;
-	}
+
 	close ($socket);
-	my $name = gethostbyaddr($client->peeraddr, AF_INET);
-		print "$name $$ \n";
-		my $port = $client->peerport;
-		while (<$client>) {
-			if (/^>/) {
-				my ($path, $args) = /^> ([^;]+);(.*)/;
-				print "exec: \"/usr/bin/make $args 2>&1 |\"\n"; 
+	print inet_ntoa($client->peeraddr)." $$\n";
+	while (<$client>) {
+		if (/^>/) {
+			my $err = 0;
+			my $remote_path="";
+			my ($path, $args) = /^> ([^;]+);(.*)/;
+
+			my $tab = check_directory($path);
+			if (!defined ($tab->{"target"})) {
+				print $client "< Error: Target $path not configured\n";
+				$err = 1;
+			} else {
+				if ($> == 0) {
+					$< = $> = $tab->{"target_as"} if defined ($tab->{"target_as"});
+					# TODO $( $) - gid
+				}
+				if ($> == 0) {
+					print $client "< Warning: all compilation are made by super user\n";
+				}
+				chdir $tab->{"remote_path"} or print "< Error: unable to change directory\n";
 				open (CMD, "/usr/bin/make $args 2>&1 |") or die ("dupa 2");
 				while (<CMD>) {
 					print $client "< ".$_;
 				}
-				print $client "! done\n";
-			} else {
-				die "dupa\n";	
 			}
+			print $client "! done ($err)\n";
+		} else {
+			die "dupa\n";	
 		}
-		close $client or die "Can't close ($!)\n";
-		print "Finish \n";
-		sleep 100;
-		exit (0);
+	}
+	close $client or die "Can't close ($!)\n";
+	exit (0);
 } continue {
 	print "Close client\n";
 	close $client;
