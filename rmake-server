@@ -16,6 +16,7 @@
 #
 
 use IO::Socket::INET;
+use NetAddr::IP;
 use strict;
 use warnings;
 use POSIX;
@@ -41,12 +42,20 @@ sub config_file {
 				my ($key, $value) = /(.+)=(.*)/;
 				next unless $key;
 				next unless $value;
+				if ($key eq "allow") {
+					my @ip_range = split(",", $value);
+					my @ranges;
+					foreach (@ip_range) {
+						my $ip = NetAddr::IP->new($_) or next; 
+						push(@ranges, $ip);
+					}
+					$translate_table{$section_param}{'ip_ranges'} = \@ranges;
+				}
 				$translate_table{$section_param} = {} unless defined $translate_table{$section_param};	
 				$translate_table{$section_param}{$key} = $value;
 			}
 		}
 	}
-#	print Dumper(\%translate_table);
 }
 
 sub check_directory($) {
@@ -72,21 +81,28 @@ my $socket = IO::Socket::INET->new('LocalPort' => $port,
 				   'Proto' => 'tcp',
 				   'Listen' => SOMAXCONN)
     or die "Can't create socket ($!)\n";
-print "Server listening\n";
 my ($client, $pid);
 while ($client = $socket->accept) {
 	next if $pid = fork();
 	die "Cannot fork" unless defined $pid;
 
 	close ($socket);
-	print inet_ntoa($client->peeraddr)." $$\n";
+	my $r_ip = NetAddr::IP->new(inet_ntoa($client->peeraddr));
 	while (<$client>) {
 		if (/^>/) {
 			my $err = 0;
+			my $allow = 0;
 			my $remote_path="";
 			my ($path, $args) = /^> ([^;]+);(.*)/;
-
 			my $tab = check_directory($path);
+			my $ranges = $tab->{"ip_ranges"};
+			foreach (@$ranges) {
+				$allow = 1 if ($r_ip->within($_));
+			}
+			if ($allow == 0) {
+				print $client "< Error: host is not allowed to compile on this machine\n";
+				$err = 130;
+			} else {
 			if (!defined ($tab->{"target"})) {
 				print $client "< Error: Target $path not configured\n";
 				$err = 1;
@@ -103,16 +119,13 @@ while ($client = $socket->accept) {
 				while (<CMD>) {
 					print $client "< ".$_;
 				}
-			}
+			}}
 			print $client "! done ($err)\n";
-		} else {
-			die "dupa\n";	
 		}
 	}
 	close $client or die "Can't close ($!)\n";
 	exit (0);
 } continue {
-	print "Close client\n";
 	close $client;
 }
 die "Can't accept socket ($! / $$)\n";
